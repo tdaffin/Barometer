@@ -37,34 +37,17 @@ import java.util.concurrent.FutureTask
 class BarometerTester(klass: Class<*>) : BlockJUnit4ClassRunner(load(klass)) {
     @Suppress("UNCHECKED_CAST")
     companion object {
-        var started = false
-        var testCount = -1
 
-        // References to Barometer's mod class & fields
-        lateinit var barometer: Class<*>
-        lateinit var taskQueue: Queue<FutureTask<*>>
-        lateinit var finishedLatch: CountDownLatch
+        var runningTests = true
+
+        lateinit var proxy: BarometerProxy
 
         private fun load(klass: Class<*>): Class<*> {
-            // If game not started, start it and grab the Barometer mod class
-            if (!started) {
-                started = true
+            if ( !runningTests )
+                return klass
 
-                // Normally, LaunchWrapper sets the thread's context class loader to the LaunchClassLoader.
-                // However, that causes issue as soon as tests are run in the normal class loader in the same thread.
-                // Simply resetting it seems to fix various issues with Mockito.
-
-                val thread = Thread.currentThread()
-                val contextClassLoader = thread.contextClassLoader
-
-                GradleStartTestServer().launch(arrayOf("--noCoreSearch", "nogui"))
-
-                thread.contextClassLoader = contextClassLoader
-
-                barometer = Class.forName(Barometer::class.qualifiedName, true, Launch.classLoader)
-                taskQueue = barometer.getField("futureTaskQueue")[null] as Queue<FutureTask<*>>
-                finishedLatch = barometer.getField("finishedLatch")[null] as CountDownLatch
-            }
+            proxy = BarometerProxy()
+            proxy.start()
 
             // Return test class that's been loaded by the same classloader as Minecraft
             try {
@@ -77,6 +60,55 @@ class BarometerTester(klass: Class<*>) : BlockJUnit4ClassRunner(load(klass)) {
 
     override fun run(notifier: RunNotifier?) {
         super.run(notifier)
+        if ( runningTests )
+            proxy.run()
+    }
+
+    override fun runChild(method: FrameworkMethod?, notifier: RunNotifier?) {
+        if ( !runningTests )
+            return
+        val task = ListenableFutureTask.create {
+            super.runChild(method, notifier)
+        }
+        proxy.addTask(task)
+        task.get()
+    }
+}
+
+class BarometerProxy {
+    companion object {
+        var started = false
+        var testCount = -1
+
+        // References to Barometer's mod class & fields
+        lateinit var barometer: Class<*>
+        lateinit var taskQueue: Queue<FutureTask<*>>
+        lateinit var finishedLatch: CountDownLatch
+    }
+
+    fun start() {
+        // If game not started, start it and grab the Barometer mod class
+        if (!started) {
+            started = true
+
+            // Normally, LaunchWrapper sets the thread's context class loader to the LaunchClassLoader.
+            // However, that causes issue as soon as tests are run in the normal class loader in the same thread.
+            // Simply resetting it seems to fix various issues with Mockito.
+
+            val thread = Thread.currentThread()
+            val contextClassLoader = thread.contextClassLoader
+
+            GradleStartTestServer().launch(arrayOf("--noCoreSearch", "nogui"))
+
+            thread.contextClassLoader = contextClassLoader
+
+            barometer = Class.forName(Barometer::class.qualifiedName, true, Launch.classLoader)
+            taskQueue = barometer.getField("futureTaskQueue")[null] as Queue<FutureTask<*>>
+            finishedLatch = barometer.getField("finishedLatch")[null] as CountDownLatch
+        }
+    }
+
+    fun run() {
         if (testCount == -1) {
             try {
                 // Use FastClasspathScanner to find the number of Barometer tests being run
@@ -102,14 +134,10 @@ class BarometerTester(klass: Class<*>) : BlockJUnit4ClassRunner(load(klass)) {
         }
     }
 
-    override fun runChild(method: FrameworkMethod?, notifier: RunNotifier?) {
-        val task = ListenableFutureTask.create {
-            super.runChild(method, notifier)
-        }
+    fun addTask(task: FutureTask<*>) {
         synchronized(taskQueue) {
             taskQueue.add(task)
         }
-        task.get()
     }
 }
 
