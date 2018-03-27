@@ -18,7 +18,9 @@
  */
 package com.jjtparadox.barometer.gradle
 
+import com.jjtparadox.barometer.tester.TestMain
 import net.minecraftforge.gradle.user.patcherUser.forge.ForgeExtension
+import org.gradle.api.GradleException
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.api.tasks.testing.Test
@@ -43,6 +45,13 @@ class BarometerPlugin : Plugin<Project> {
             if (extension.exitWhenCompleted) {
                 System.setProperty("barometer.exitWhenCompleted", true.toString())
             }
+
+            // Create a new process to run barometer tests in
+            println("Creating process for BarometerTester tests")
+            var process = TestMain.launch()
+            val exitValue = process.waitFor()
+            if ( exitValue != 0 )
+                throw GradleException("Test process exited with $exitValue")
         }
         testTask.dependsOn(barometerTask)
 

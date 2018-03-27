@@ -25,20 +25,26 @@ import io.github.lukehutch.fastclasspathscanner.FastClasspathScanner
 import net.minecraft.launchwrapper.Launch
 import net.minecraft.launchwrapper.LaunchClassLoader
 import net.minecraftforge.fml.common.launcher.FMLServerTweaker
+import org.junit.runner.Description
+import org.junit.runner.JUnitCore
 import org.junit.runner.RunWith
+import org.junit.runner.notification.RunListener
 import org.junit.runner.notification.RunNotifier
 import org.junit.runners.BlockJUnit4ClassRunner
 import org.junit.runners.model.FrameworkMethod
 import org.junit.runners.model.InitializationError
+import java.io.File
+import java.util.ArrayList
 import java.util.Queue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.FutureTask
+import kotlin.reflect.jvm.jvmName
 
 class BarometerTester(klass: Class<*>) : BlockJUnit4ClassRunner(load(klass)) {
     @Suppress("UNCHECKED_CAST")
     companion object {
 
-        var runningTests = true
+        var runningTests = false
 
         lateinit var proxy: BarometerProxy
 
@@ -173,5 +179,71 @@ class TestTweaker : FMLServerTweaker() {
         classLoader.addClassLoaderExclusion("com.thoughtworks.xstream")
 
         super.injectIntoClassLoader(classLoader)
+    }
+}
+
+object TestMain {
+
+    @JvmStatic
+    fun launch(args: Array<String>? = null) : Process {
+        val argumentList = object : ArrayList<String>() {
+            init {
+                add(File(System.getProperty("java.home"), "bin/java").path)
+                add("-cp")
+                add(System.getProperty("java.class.path"))
+                add(TestMain::class.jvmName)
+                if ( args != null )
+                    for (arg in args)
+                        add(arg)
+            }
+        }
+        println("Launching test process with args:")
+        argumentList.forEach({ println("\t$it") })
+        val pb = ProcessBuilder(argumentList)
+        pb.inheritIO()
+        return pb.start()
+    }
+
+    @Throws(Exception::class)
+    @JvmStatic
+    fun main(args: Array<String>) {
+        runTests()
+    }
+
+    private fun runTests() {
+        val testClasses = findTests().toTypedArray()
+        println("Running test classes:")
+        testClasses.forEach({ println("\t$it") })
+        val jUnitCore = JUnitCore()
+        jUnitCore.addListener(TestRunListener())
+        BarometerTester.runningTests = true
+        val result = jUnitCore.run(*testClasses)
+        println("Test run: ${result.runCount}, Failed: ${result.failureCount}")
+    }
+
+    private fun findTests(): List<Class<*>> {
+        val classes = ArrayList<Class<*>>()
+        try {
+            // Use FastClasspathScanner to find the Barometer tests being run
+            // Only scan directories for .class files
+            val scanner = FastClasspathScanner("-jar:")
+            scanner.matchClassesWithAnnotation(RunWith::class.java, {
+                val annotation = it.getAnnotation(RunWith::class.java)
+                if (annotation.value == BarometerTester::class)
+                    classes.add(it)
+            })
+            scanner.scan()
+        } catch (e: Exception) {
+            System.err.println("Could not get tests to run with BarometerTester:")
+            e.printStackTrace(System.err)
+        }
+        return classes
+    }
+}
+
+class TestRunListener : RunListener() {
+    @Throws(Exception::class)
+    override fun testStarted(description: Description) {
+        println("Test started: ${description.className}#${description.methodName}")
     }
 }
